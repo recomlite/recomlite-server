@@ -53,12 +53,31 @@ ImpressionDiscountingReranker.new = function(options)
   -- luacheck: globals AbstractReranker
   local self = AbstractReranker.new()
   self.options = options or {};
-  self.w1 = options.w1 or 1.0;
-  self.w2 = options.w2 or 1.0;
+  self.w1 = options.w1 or 0.5;
+  self.w2 = options.w2 or 0.5;
+  self.impressionExponent = options.impressionExponent or 0.5;
+  self.lastSeenExponent = options.lastSeenExponent or 0.5;
 
   -----------------------------------------------------------------------------
   --[[ PRIVATE METHODS ]]------------------------------------------------------
   -----------------------------------------------------------------------------
+
+  --[[
+  -- Exponential Impression Discounting Function
+  --]]
+  function self._calculateImpressionBasedDiscount (impression_count)
+    return (1 / math.pow(impression_count + 1, self.impressionExponent));
+  end -- ImpressionDiscountingReranker::_calculateImpressionBasedDiscount()
+
+  -----------------------------------------------------------------------------
+
+  --[[
+  -- Exponential Time Discounting Function
+  --]]
+  function self._calculateTimeBasedDiscount (seconds_since_last_impression)
+    return (1 / math.pow(seconds_since_last_impression + 1,
+      self.lastSeenExponent));
+  end -- ImpressionDiscountingReranker::_calculateTimeBasedDiscount()
 
   -----------------------------------------------------------------------------
   --[[ ABSTRACT IMPLEMENTATIONS ]]---------------------------------------------
@@ -66,6 +85,28 @@ ImpressionDiscountingReranker.new = function(options)
 
   -- luacheck: push no unused args
   function self.rerank (user_id, recommendations)
+
+    -- Sort recommendations by score descending
+    table.sort(recommendations, function (a, b)
+      return a.score > b.score;
+    end);
+
+    -- Fetch impression data for user.
+
+    -- Calculate dither score by rank [1, n]
+    local ds = {};
+    for ii = 1, #recommendations
+    do
+      ds[recommendations[ii].id] = (recommendations[ii].score
+        * ((self.w1 * self._calculateImpressionBasedDiscount(ii))
+          + (self.w2 * self._calculateTimeBasedDiscount(ii))));
+    end
+
+    -- Sort recommendations by ditherScore ascending */
+    table.sort(recommendations, function (a, b)
+      return ds[a.id] < ds[b.id];
+    end);
+
     return recommendations;
   end -- ImpressionDiscountingReranker::rerank()
   -- luacheck: pop
