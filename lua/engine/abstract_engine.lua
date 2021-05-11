@@ -45,6 +45,10 @@ AbstractEngine.new = function()
       error("I am abstract!");
   end
 
+  function self.getRecommendations()
+      error("I am abstract!");
+  end
+
   return self;
 end
 --fpp:endif

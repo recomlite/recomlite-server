@@ -101,6 +101,16 @@ CBEngine.new = function(dbname)
 
   -----------------------------------------------------------------------------
 
-  return self
+  function self.getRecommendations (
+    user_id,
+    limit
+  )
+    limit = limit or 10;
+    return {};
+  end -- CBEngine::getRecommendations()
+
+  -----------------------------------------------------------------------------
+
+  return self;
 end -- CBEngine
 --fpp:endif
