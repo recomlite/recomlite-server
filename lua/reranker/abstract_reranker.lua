@@ -9,7 +9,7 @@
 **            /_/ |_|\___/\___/\____/_/ /_/ /_/_____/_/\__/\___/             **
 **                                                                           **
 ** ========================================================================= **
-**                         ABSTRACT RERANKER INTERFACE                         **
+**                       ABSTRACT RERANKER INTERFACE                         **
 ** ========================================================================= **
 ** RecomLite Recommender System                                              **
 ** Copyright (C) Jonah H. Harris <jonah.harris@gmail.com>                    **
@@ -57,13 +57,17 @@
 **  EVALSHA <SHA> 7 179 2 166 2205 pv in 179                                 **
 ** ======================================================================= --]]
 
-local AbstractReranker = {}
+-- luacheck: push ignore AbstractReranker
+local AbstractReranker = {};
+-- luacheck: pop
 AbstractReranker.new = function()
   local self = {};
 
+  -- luacheck: push no unused args
   function self.rerank(user_id, recommendations)
     error("I am abstract!");
   end
+  -- luacheck: pop
 
   return self;
 end

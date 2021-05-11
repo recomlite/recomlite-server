@@ -42,55 +42,33 @@
 **  local rrecs = idr.rerank('user-001', recs);                              **
 ** ======================================================================= --]]
 
-local ImpressionDiscountingReranker = {}
-ImpressionDiscountingReranker.new = function(dbname)
-  -------------------------------------------------------------------------------
-  --[[ PROPERTIES ]]-------------------------------------------------------------
-  -------------------------------------------------------------------------------
+-- luacheck: push ignore ImpressionDiscountingReranker
+local ImpressionDiscountingReranker = {};
+-- luacheck: pop
+ImpressionDiscountingReranker.new = function(options)
+  -----------------------------------------------------------------------------
+  --[[ PROPERTIES ]]-----------------------------------------------------------
+  -----------------------------------------------------------------------------
 
+  -- luacheck: globals AbstractReranker
   local self = AbstractReranker.new()
   self.options = options or {};
-  self.epsilon = options.epsilon or 1.0;
-  self.sd = 1e-10;
+  self.w1 = options.w1 or 1.0;
+  self.w2 = options.w2 or 1.0;
 
-  if (self.options.epsilon > 1.0) then
-    self.sd = math.sqrt(math.log(self.options.epsilon));
-  end
+  -----------------------------------------------------------------------------
+  --[[ PRIVATE METHODS ]]------------------------------------------------------
+  -----------------------------------------------------------------------------
 
-  -------------------------------------------------------------------------------
-  --[[ PRIVATE METHODS ]]--------------------------------------------------------
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
+  --[[ ABSTRACT IMPLEMENTATIONS ]]---------------------------------------------
+  -----------------------------------------------------------------------------
 
-  -------------------------------------------------------------------------------
-  --[[ ABSTRACT IMPLEMENTATIONS ]]-----------------------------------------------
-  -------------------------------------------------------------------------------
-
-  function self.rerank (user_id, recommendations, epsilon)
-    local function gaussian (mean, sd)
-      local u1, u2
-      repeat u1 = math.random() u2 = math.random() until u1 > 0.0001
-
-      local logPiece = math.sqrt(-2 * math.log(u1))
-      local cosPiece = math.cos(2 * math.pi * u2)
-
-      return ((logPiece * cosPiece) * sd + mean);
-    end
-
-    -- Sort recommendations by score descending
-    table.sort(recommendations, function (a, b) return a.score > b.score end)
-    
-    -- Calculate dither score by rank
-    local ds = {};
-    for ii = 1, #recommendations
-    do
-      ds[recommendations[ii].id] = (math.log(ii) + gaussian(0, self.sd));
-    end
-
-    -- Sort recommendations by ditherScore ascending */
-    table.sort(recommendations, function (a, b) return ds[a.id] < ds[b.id] end)
-
+  -- luacheck: push no unused args
+  function self.rerank (user_id, recommendations)
     return recommendations;
-  end
+  end -- ImpressionDiscountingReranker::rerank()
+  -- luacheck: pop
 
   return self
 end -- ImpressionDiscountingReranker

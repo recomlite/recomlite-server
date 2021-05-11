@@ -65,6 +65,7 @@
 
 local pretty = require('pl.pretty');
 local fakeredis = require('fakeredis');
+-- luacheck: globals table, ignore unpack
 local unpack = table.unpack;
 local db = fakeredis.new();
 
@@ -74,39 +75,27 @@ local redis = {
   end
 };
 
---[[
-let store = {
-  itemCounts: {
-  },
-  pairCounts: {
-  },
-  similarities: {
-  },
-  similaritiesIndex: {
-  },
-  users: {
-  }
-};
-]]--
-
-local TCREngine = {}
+-- luacheck: push ignore TCREngine
+local TCREngine = {};
+-- luacheck: pop
 TCREngine.new = function(dbname)
-  -------------------------------------------------------------------------------
-  --[[ PROPERTIES ]]-------------------------------------------------------------
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
+  --[[ PROPERTIES ]]-----------------------------------------------------------
+  -----------------------------------------------------------------------------
 
+  -- luacheck: globals AbstractEngine
   local self = AbstractEngine.new()
   self.name = 'TencentRec Item-based Collaborative Filtering Engine';
 
   self.dbname = dbname;
 
-  -------------------------------------------------------------------------------
-  --[[ PRIVATE METHODS ]]--------------------------------------------------------
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
+  --[[ PRIVATE METHODS ]]------------------------------------------------------
+  -----------------------------------------------------------------------------
 
-  -------------------------------------------------------------------------------
-  --[[ PRIVATE METHODS ]]--------------------------------------------------------
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
+  --[[ PRIVATE METHODS ]]------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   --[[
   -- Updates the item count.
@@ -118,7 +107,7 @@ TCREngine.new = function(dbname)
     redis.call('zincrby', 'z:item:counts', delta_weight, item_id);
   end -- TCREngine::_updateItemCount()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   --[[
   -- Saves a new user and updates the item count.
@@ -134,7 +123,7 @@ TCREngine.new = function(dbname)
     self._updateItemCount(item_id, weight);
   end -- TCREngine::_saveNewUser()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   --[[
   -- Composes two ids into a pair.
@@ -148,7 +137,7 @@ TCREngine.new = function(dbname)
     return (ids[1] .. ':' .. ids[2]);
   end -- TCREngine::_composeItemPairKey()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   --[[
   -- Composes two ids into a pair.
@@ -159,14 +148,16 @@ TCREngine.new = function(dbname)
     similarity
   )
     print("SAVING SIMILARITY")
-    redis.call('zadd', 'z:item:similarities:' .. firstItem, similarity, secondItem);
-    redis.call('zadd', 'z:item:similarities:' .. secondItem, similarity, firstItem);
+    redis.call('zadd', 'z:item:similarities:' .. firstItem, similarity,
+      secondItem);
+    redis.call('zadd', 'z:item:similarities:' .. secondItem, similarity,
+      firstItem);
 
     local itemPairKey = self._composeItemPairKey(firstItem, secondItem);
     redis.call('hset', 'h:item:similarities:', itemPairKey, similarity);
   end -- TCREngine::_saveSimilarity()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   --[[
   -- Composes two ids into a pair.
@@ -185,7 +176,7 @@ TCREngine.new = function(dbname)
     self._saveSimilarity(firstItem, secondItem, similarity);
   end -- TCREngine::_updateSimilarity()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   --[[
   -- Composes two ids into a pair.
@@ -212,7 +203,8 @@ TCREngine.new = function(dbname)
     end
 
     local itemPairKey = self._composeItemPairKey(eventItemId, anotherItemId);
-    local currentPairCount = tonumber(redis.call('zscore', 'z:item:paircounts', itemPairKey));
+    local currentPairCount = tonumber(redis.call('zscore', 'z:item:paircounts',
+      itemPairKey));
     if (nil == currentPairCount) then
       currentPairCount = 0;
     end
@@ -225,7 +217,7 @@ TCREngine.new = function(dbname)
       (currentPairCount + deltaCoRating));
   end -- TCREngine::_updatePairCount()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   --[[
   -- Composes two ids into a pair.
@@ -244,7 +236,7 @@ TCREngine.new = function(dbname)
       newItemCount, anotherItemId, anotherItemWeight);
   end -- TCREngine::_updatePair()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   --[[
   -- Composes two ids into a pair.
@@ -273,7 +265,7 @@ TCREngine.new = function(dbname)
     end
   end -- TCREngine::_recalculateSimilarity()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   --[[
   -- Retrieves the user's items.
@@ -297,7 +289,7 @@ TCREngine.new = function(dbname)
     return user;
   end -- TCREngine::_getUserItems()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   --[[
   -- Composes two ids into a pair.
@@ -339,7 +331,7 @@ TCREngine.new = function(dbname)
     self._recalculateSimilarity(user, item_id, currentWeight, newWeight);
   end -- TCREngine::_track_event()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   --[[
   -- Composes two ids into a pair.
@@ -370,7 +362,9 @@ TCREngine.new = function(dbname)
     do
       local counter = 0;
       local similarities = {};
-      local similarItems = redis.call('zrevrangebyscore', 'z:item:similarities:' .. item_id, '+inf', '-inf', 'withscores', 'limit', 0, 100);
+      local similarItems = redis.call('zrevrangebyscore',
+        'z:item:similarities:' .. item_id,
+        '+inf', '-inf', 'withscores', 'limit', 0, 100);
       --print("similarItems for " .. item_id);
       --pretty.dump(similarItems);
       local sims = {};
@@ -383,7 +377,9 @@ TCREngine.new = function(dbname)
       for similar_item_id, similar_item_value in pairs(sims)
       do
         -- Prune recommended items by those already purchased.
-        if (nil == userItems[similar_item_id] or 5 ~= userItems[similar_item_id]) then
+        if (nil == userItems[similar_item_id]
+          or 5 ~= userItems[similar_item_id])
+        then
           table.insert(similarities, {
             item_id,
             similar_item_id,
@@ -441,8 +437,10 @@ TCREngine.new = function(dbname)
         final_scores[score[1]] = { 0, 0 };
       end
 
-      print('final[' .. score[1] .. '][1] = ' .. final_scores[score[1]][1] .. ' + ' .. score[2]);
-      print('final[' .. score[1] .. '][2] = ' .. final_scores[score[1]][2] .. ' + ' .. score[3]);
+      print('final[' .. score[1] .. '][1] = ' .. final_scores[score[1]][1]
+        .. ' + ' .. score[2]);
+      print('final[' .. score[1] .. '][2] = ' .. final_scores[score[1]][2]
+        .. ' + ' .. score[3]);
       final_scores[score[1]][1] = (final_scores[score[1]][1] + score[2]);
       final_scores[score[1]][2] = (final_scores[score[1]][2] + score[3]);
     end
@@ -453,7 +451,8 @@ TCREngine.new = function(dbname)
     local sum = 0;
     for item_id, item_score in pairs(final_scores)
     do
-      print('> final[' .. item_id .. '] = ' .. item_score[1] .. ' / ' .. item_score[2]);
+      print('> final[' .. item_id .. '] = ' .. item_score[1] .. ' / '
+        .. item_score[2]);
       final_scores[item_id] = (item_score[1] / item_score[2]);
       sum = (sum + final_scores[item_id]);
     end
@@ -479,7 +478,7 @@ TCREngine.new = function(dbname)
     return result;
   end -- TCREngine::_track_event()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   --[[
   -- Composes two ids into a pair.
@@ -505,7 +504,7 @@ TCREngine.new = function(dbname)
      *     single request to each item server.
      *  3. Return the results.
     ]]--
-    local itemSimilarities = {};
+    --local itemSimilarities = {};
     local keys = {};
     local weights = {};
     local counter = 0;
@@ -527,35 +526,50 @@ TCREngine.new = function(dbname)
       args[#args + 1] = weights[ii];
     end
 
-    --redis.call('zunionstore', 'out', '4', 'z:item:similarities:item-4', 'z:item:similarities:item-2', 'z:item:similarities:item-1', 'z:item:similarities:item-3', 'weights', '3', '5', '2', '2');
+    --[[
+    redis.call('zunionstore', 'out', '4',
+      'z:item:similarities:item-4', 'z:item:similarities:item-2',
+      'z:item:similarities:item-1', 'z:item:similarities:item-3',
+      'weights', '3', '5', '2', '2');
+    ]]--
     pretty.dump(keyOnlyArgs);
     redis.call('zunionstore', 'out-summed', #keys, unpack(keyOnlyArgs));
     redis.call('zunionstore', 'out-weighted', #keys, unpack(args));
 
-    --local similarItems = redis.call('zdiffstore', 'out', '+inf', '-inf', 'withscores', 'limit', 0, 100);
-    local similarItemsSummed = redis.call('zrevrangebyscore', 'out-summed', '+inf', '-inf', 'withscores', 'limit', 0, 100);
+    --local similarItems = redis.call('zdiffstore', 'out', '+inf', '-inf',
+    --  'withscores', 'limit', 0, 100);
+    local similarItemsSummed = redis.call('zrevrangebyscore', 'out-summed',
+      '+inf', '-inf', 'withscores', 'limit', 0, 100);
     print("summed");
     pretty.dump(similarItemsSummed);
-    local similarItems = redis.call('zrevrangebyscore', 'out-weighted', '+inf', '-inf', 'withscores', 'limit', 0, 100);
+    local similarItems = redis.call('zrevrangebyscore', 'out-weighted',
+      '+inf', '-inf', 'withscores', 'limit', 0, 100);
     --print("weighted");
     --pretty.dump(similarItems);
     local sims = {};
     for ii = 1, #similarItems
     do
-      similarItemSum = tonumber(redis.call('zscore', 'out-summed', similarItems[ii][1]));
-      print('> sims[' .. similarItems[ii][1] .. '] = ' .. tonumber(similarItems[ii][2]) .. ' / ' .. similarItemSum);
-      sims[similarItems[ii][1]] = tonumber(similarItems[ii][2]) / similarItemSum;
+      local similarItemSum = tonumber(redis.call('zscore', 'out-summed',
+        similarItems[ii][1]));
+      print('> sims[' .. similarItems[ii][1] .. '] = '
+        .. tonumber(similarItems[ii][2]) .. ' / ' .. similarItemSum);
+      sims[similarItems[ii][1]] = (tonumber(similarItems[ii][2])
+        / similarItemSum);
     end
     pretty.dump(sims);
 
     local final_scores = {};
-    counter = 0;
     local sum = 0;
     for similar_item_id, similar_item_value in pairs(sims)
     do
       -- Prune recommended items by those already purchased.
-      if (nil == userItems[similar_item_id] or 5 ~= userItems[similar_item_id]) then
-        table.insert(final_scores, { id = similar_item_id, score = similar_item_value });
+      if (nil == userItems[similar_item_id]
+        or 5 ~= userItems[similar_item_id])
+      then
+        table.insert(final_scores, {
+          id = similar_item_id,
+          score = similar_item_value
+        });
         sum = (sum + similar_item_value);
 
         counter = (counter + 1);
@@ -578,21 +592,21 @@ TCREngine.new = function(dbname)
     return final_scores;
   end -- TCREngine::_track_event()
 
-  -------------------------------------------------------------------------------
-  --[[ ABSTRACT IMPLEMENTATIONS ]]-----------------------------------------------
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
+  --[[ ABSTRACT IMPLEMENTATIONS ]]---------------------------------------------
+  -----------------------------------------------------------------------------
 
   function self.addUser()
     print("Inside Overriding Function (" .. self.dbname .. ")")
   end -- TCREngine::addUser()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   function self.addItem()
     print("Inside Overriding Function (" .. self.dbname .. ")")
   end -- TCREngine::addItem()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   function self.recordInteraction(interaction)
     --print("Inside Overriding Function (" .. self.dbname .. ")")
@@ -600,9 +614,9 @@ TCREngine.new = function(dbname)
       interaction.event_type, interaction.weight);
   end -- TCREngine::recordInteraction()
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
 
   return self
 end -- TCREngine

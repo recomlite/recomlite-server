@@ -51,12 +51,15 @@
 
 --fpp:include "abstract_reranker.lua"
 
-local EpsilonDitheringReranker = {}
+-- luacheck: push ignore EpsilonDitheringReranker
+local EpsilonDitheringReranker = {};
+-- luacheck: pop
 EpsilonDitheringReranker.new = function(options)
-  -------------------------------------------------------------------------------
-  --[[ PROPERTIES ]]-------------------------------------------------------------
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
+  --[[ PROPERTIES ]]-----------------------------------------------------------
+  -----------------------------------------------------------------------------
 
+  -- luacheck: globals AbstractReranker
   local self = AbstractReranker.new()
   self.options = options or {};
   self.epsilon = options.epsilon or 1.0;
@@ -66,15 +69,16 @@ EpsilonDitheringReranker.new = function(options)
     self.sd = math.sqrt(math.log(self.options.epsilon));
   end
 
-  -------------------------------------------------------------------------------
-  --[[ PRIVATE METHODS ]]--------------------------------------------------------
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
+  --[[ PRIVATE METHODS ]]------------------------------------------------------
+  -----------------------------------------------------------------------------
 
-  -------------------------------------------------------------------------------
-  --[[ ABSTRACT IMPLEMENTATIONS ]]-----------------------------------------------
-  -------------------------------------------------------------------------------
+  -----------------------------------------------------------------------------
+  --[[ ABSTRACT IMPLEMENTATIONS ]]---------------------------------------------
+  -----------------------------------------------------------------------------
 
-  function self.rerank (user_id, recommendations, epsilon)
+  -- luacheck: push no unused args
+  function self.rerank (user_id, recommendations)
     local function gaussian (mean, sd)
       local u1, u2
       repeat u1 = math.random() u2 = math.random() until u1 > 0.0001
@@ -87,7 +91,7 @@ EpsilonDitheringReranker.new = function(options)
 
     -- Sort recommendations by score descending
     table.sort(recommendations, function (a, b) return a.score > b.score end)
-    
+
     -- Calculate dither score by rank
     local ds = {};
     for ii = 1, #recommendations
@@ -99,7 +103,8 @@ EpsilonDitheringReranker.new = function(options)
     table.sort(recommendations, function (a, b) return ds[a.id] < ds[b.id] end)
 
     return recommendations;
-  end
+  end -- EpsilonDitheringReranker::rerank()
+  -- luacheck: pop
 
   return self
 end -- EpsilonDitheringReranker

@@ -27,7 +27,9 @@
 **  subclassed by actual implementations.                                    **
 ** ======================================================================= --]]
 
-local AbstractEngine = {}
+-- luacheck: push ignore AbstractEngine
+local AbstractEngine = {};
+-- luacheck: pop
 AbstractEngine.new = function()
   local self = {};
 
