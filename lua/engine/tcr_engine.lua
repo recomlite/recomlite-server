@@ -472,11 +472,13 @@ TCREngine.new = function(dbname)
     --pretty.dump(result);
 
     --print("-- FINAL SCORES (NORMALIZED AND SORTED)");
-    table.sort(result, function (a, b) return a.score > b.score end)
+    table.sort(result, function (a, b)
+      return a.score > b.score;
+    end);
     --pretty.dump(result);
 
     return result;
-  end -- TCREngine::_track_event()
+  end -- TCREngine::_getRecommendations()
 
   -----------------------------------------------------------------------------
 

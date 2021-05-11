@@ -70,6 +70,6 @@ ImpressionDiscountingReranker.new = function(options)
   end -- ImpressionDiscountingReranker::rerank()
   -- luacheck: pop
 
-  return self
+  return self;
 end -- ImpressionDiscountingReranker
 --fpp:endif

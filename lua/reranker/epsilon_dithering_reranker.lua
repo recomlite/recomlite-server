@@ -80,19 +80,21 @@ EpsilonDitheringReranker.new = function(options)
   -- luacheck: push no unused args
   function self.rerank (user_id, recommendations)
     local function gaussian (mean, sd)
-      local u1, u2
-      repeat u1 = math.random() u2 = math.random() until u1 > 0.0001
+      local u1, u2;
+      repeat u1 = math.random() u2 = math.random() until u1 > 0.0001;
 
-      local logPiece = math.sqrt(-2 * math.log(u1))
-      local cosPiece = math.cos(2 * math.pi * u2)
+      local logPiece = math.sqrt(-2 * math.log(u1));
+      local cosPiece = math.cos(2 * math.pi * u2);
 
       return ((logPiece * cosPiece) * sd + mean);
     end
 
     -- Sort recommendations by score descending
-    table.sort(recommendations, function (a, b) return a.score > b.score end)
+    table.sort(recommendations, function (a, b)
+      return a.score > b.score;
+    end);
 
-    -- Calculate dither score by rank
+    -- Calculate dither score by rank [1, n]
     local ds = {};
     for ii = 1, #recommendations
     do
@@ -100,12 +102,14 @@ EpsilonDitheringReranker.new = function(options)
     end
 
     -- Sort recommendations by ditherScore ascending */
-    table.sort(recommendations, function (a, b) return ds[a.id] < ds[b.id] end)
+    table.sort(recommendations, function (a, b)
+      return ds[a.id] < ds[b.id];
+    end);
 
     return recommendations;
   end -- EpsilonDitheringReranker::rerank()
   -- luacheck: pop
 
-  return self
+  return self;
 end -- EpsilonDitheringReranker
 --fpp:endif
