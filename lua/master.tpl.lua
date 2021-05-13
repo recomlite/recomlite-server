@@ -15,12 +15,81 @@
 
 --fpp:include "reranker/epsilon_dithering_reranker.lua"
 
+--[[ UTILITIES ]]--------------------------------------------------------------
+
+--fpp:include "common/interner.lua"
+
+local Logger = {};
+Logger.new = function (config)
+  local self = {};
+
+  local function tostring(value)
+    local str = ''
+
+    if (type(value) ~= 'table') then
+      if (type(value) == 'string') then
+        str = string.format("%q", value)
+      else
+        str = _tostring(value)
+      end
+    else
+      local auxTable = {}
+      for key in pairs(value) do
+        if (tonumber(key) ~= key) then
+          table.insert(auxTable, key)
+        else
+          table.insert(auxTable, tostring(key))
+        end
+      end
+      table.sort(auxTable)
+    
+      str = str..'{'
+      local separator = ""
+      local entry = ""
+      for _, fieldName in ipairs(auxTable) do
+        if ((tonumber(fieldName)) and (tonumber(fieldName) > 0)) then
+          entry = tostring(value[tonumber(fieldName)])
+        else
+          entry = fieldName.." = "..tostring(value[fieldName])
+        end
+        str = str..separator..entry
+        separator = ", "
+      end
+      str = str..'}'
+    end
+    return str
+  end
+
+  self.debug = function (fmt, ...)
+    if (type(fmt) == 'table') then
+      print(tostring(fmt));
+    else
+      print(string.format(fmt, ...));
+    end
+  end
+  return self;
+end
+
 -- ========================================================================= --
 -- -- FUNCTIONS ------------------------------------------------------------ --
 -- ========================================================================= --
 
 -- A polymorphic function to record interactions with multiple engines at once.
 local function recordInteractionPolymorphic (engines, interaction)
+  local user_token_pool = Interner.new({
+    prefix = 'utp:',
+    logger = redis,
+    store = redis
+  });
+  local item_token_pool = Interner.new({
+    prefix = 'itp:',
+    logger = redis,
+    store = redis
+  });
+
+  interaction.userId = tostring(user_token_pool.idOf(interaction.userId));
+  interaction.itemId = tostring(item_token_pool.idOf(interaction.itemId));
+
   for k, v in pairs(engines)
   do
     v.recordInteraction(interaction);
@@ -31,10 +100,17 @@ end -- recordInteractionPolymorphic()
 
 -- A polymorphic function to recommend from multiple engines at once.
 local function getRecommendationsPolymorphic (engines, user_id)
+  local user_token_pool = Interner.new({
+    prefix = 'utp:',
+    logger = redis,
+    store = redis
+  });
+
   local recs = {};
   for k, v in pairs(engines)
   do
-    recs[k] = v.getRecommendations(user_id);
+    recs[k] = v.getRecommendations(tostring(user_token_pool.idOf(user_id,
+      type(user_id), false)));
   end
 
   return recs;
@@ -71,7 +147,11 @@ local function main (
   -- Instantiate multiple engines
   local engines = {
     cbe = CBEngine.new('cbe'),
-    tcre = TCREngine.new('tcre')
+    tcre = TCREngine.new({
+      prefix = 'tcre:',
+      logger = Logger.new(),
+      store = redis
+    });
   };
 
   -- Instantiate our re-ranker
@@ -137,10 +217,15 @@ local function main (
   redis.debug(recommendations);
 
   -- Convert to a format Redis can return.
+  local item_token_pool = Interner.new({
+    prefix = 'itp:',
+    logger = redis,
+    store = redis
+  });
   local retval = {};
   for ii = 1, #recommendations
   do
-    retval[#retval + 1] = recommendations[ii].id;
+    retval[#retval + 1] = item_token_pool.valueOf(recommendations[ii].id);
     retval[#retval + 1] = tostring(recommendations[ii].score);
   end
 

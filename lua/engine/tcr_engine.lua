@@ -82,90 +82,255 @@ local TCREngine = {};
 --[[
 -- A Redis+Lua-based implementation of the TencentRec Engine.
 --]]
-TCREngine.new = function(dbname)
+TCREngine.new = function (config)
 
   -----------------------------------------------------------------------------
   --[[ PROPERTIES ]]-----------------------------------------------------------
   -----------------------------------------------------------------------------
 
-  -- luacheck: globals AbstractEngine
-  local self = AbstractEngine.new()
-  self.__class_name = 'TCREngine';
-  self.name = 'TencentRec Item-based Collaborative Filtering Engine';
-
-  self.dbname = dbname;
-
-  -----------------------------------------------------------------------------
-  --[[ PRIVATE METHODS ]]------------------------------------------------------
-  -----------------------------------------------------------------------------
-
-  function self._compose_class_method_name (
-    method_name
-  )
-    return (self.__class_name .. '::' .. method_name);
+  -- Validate passed-in configuration.
+  if (type(config) ~= 'table'
+    or type(config.prefix) ~= 'string'
+    or type(config.logger) ~= 'table'
+    or type(config.logger.debug) ~= 'function'
+    or type(config.store) ~= 'table'
+    or type(config.store.call) ~= 'function')
+  then
+    error('invalid configuration.');
   end
 
+  -- luacheck: globals AbstractEngine
+  local self = AbstractEngine.new()
+
+  --[[
+  -- The full (descriptive) name of this engine.
+  --]]
+  self._name = 'TencentRec Item-based Collaborative Filtering Engine';
+
+  --[[
+  -- The prefix this engine uses to distinguish its keys.
+  --]]
+  self._short_name = 'tcre';
+
+  --[[
+  -- This is the configuration for our instance.
+  --]]
+  self._config = config;
+
+  --[[
+  -- The passed-in prefix used for all keys accessed by this interner.
+  --]]
+  self._prefix = config.prefix;
+
+  --[[
+  -- The passed-in logger to use.
+  --]]
+  self._logger = config.logger;
+
+  --[[
+  -- The passed-in store to use.
+  --]]
+  self._store = config.store;
+
+  --[[
+  -- keys
+  --]]
+  self._keys = {
+    --[[
+    -- This sequence key represents the primary key for interned tokens. It
+    -- should *always* contain the highest sequence value and be incremented
+    -- atomically.
+    --]]
+    sequence = (self._prefix .. ':id'),
+
+    --[[
+    -- This key, a hashmap, stores one entry for each distinct token value
+    -- interned by token (field) to token id (value). This is used for
+    -- forward lookups.
+    --]]
+    forward_hash = (self._prefix .. ':fh'),
+
+    --[[
+    -- This key, a hashmap, stores one entry for each distinct token value
+    -- interned by token id (field) to token (value). This is used for
+    -- reverse lookups.
+    --]]
+    reverse_hash = (self._prefix .. ':rh'),
+
+    --[[
+    -- This key, a hashmap, stores one entry for each distinct token value
+    -- interned by token id (field) to type (value).
+    --]]
+    type_hash = (self._prefix .. ':th'),
+
+    --[[
+    -- This key, a hashmap, stores one entry for each distinct item-to-item
+    -- pair keyed by least_item_id:greatest_item_id (field) with score (value).
+    --]]
+    item_sims_hash = table.concat({ self._prefix, 'h:i:s' }, ''),
+
+    --[[
+    -- This key, a sorted set, stores one entry for each item keyed by item_id
+    -- (field) with count (value).
+    --]]
+    item_counts_zset = table.concat({ self._prefix, 'z:i:c' }, ''),
+
+    --[[
+    -- This key, a sorted set, stores one entry for each distinct item-to-item
+    -- pair keyed by least_item_id:greatest_item_id (field) with count (value).
+    --]]
+    item_pair_count_zset = table.concat({ self._prefix, 'z:i:pc' }, '')
+  };
+
   -----------------------------------------------------------------------------
   --[[ PRIVATE METHODS ]]------------------------------------------------------
-  -----------------------------------------------------------------------------
-
-  --[[
-  -- Updates the item count.
-  --]]
-  function self._updateItemCount (
-    item_id,
-    delta_weight
-  )
-    redis.call('zincrby', 'z:item:counts', delta_weight, item_id);
-  end -- TCREngine::_updateItemCount()
-
-  -----------------------------------------------------------------------------
-
-  --[[
-  -- Saves a new user and updates the item count.
-  --]]
-  function self._saveNewUser (
-    user_id,
-    item_id,
-    weight
-  )
-    redis.log(redis.LOG_DEBUG, "SAVING NEW USER");
-    local user_key = ('h:user:i:' .. user_id);
-    redis.call('hset', user_key, item_id, weight);
-    self._updateItemCount(item_id, weight);
-  end -- TCREngine::_saveNewUser()
-
   -----------------------------------------------------------------------------
 
   --[[
   -- Composes two ids into a pair.
   --]]
-  function self._composeItemPairKey (
+  local function composeItemPairHashFieldKey (
     firstItemId,
     secondItemId
   )
+    assert(firstItemId);
+    assert(secondItemId);
     local ids = { tostring(firstItemId), tostring(secondItemId) };
     table.sort(ids);
-    return (ids[1] .. ':' .. ids[2]);
-  end -- TCREngine::_composeItemPairKey()
+    return table.concat(ids, ':');
+  end -- composeItemPairHashFieldKey()
+
+  -----------------------------------------------------------------------------
+
+  local function composeItemSimilarityZSetKey (item_id)
+    assert(item_id);
+    return string.format('%sz:i:%s:s', self._prefix, item_id);
+  end -- TCREngine::private composeItemSimilarityZSetKey()
+
+  -----------------------------------------------------------------------------
+
+  local function composeMethodName (
+    method_name
+  )
+    return table.concat({ self._short_name, method_name }, '::');
+  end -- TCREngine::private composeItemPairHashFieldKey()
+
+  -----------------------------------------------------------------------------
+
+  local function composeUserInterestHashKey (user_id)
+    assert(user_id);
+    return string.format('%sh:u:%s:i', self._prefix, user_id);
+  end -- TCREngine::private composeUserInterestHashKey()
+
+  -----------------------------------------------------------------------------
+
+  local function getItemCount (
+    itemId
+  )
+    local logger = self._logger;
+    local store = self._store;
+
+    logger.debug('getting item (%s) count', itemId);
+    return store.call('zscore', self._keys.item_counts_zset, itemId);
+  end -- TCREngine::private getItemCount()
+
+  -----------------------------------------------------------------------------
+
+  local function getPairCount (
+    itemPairKey
+  )
+    local logger = self._logger;
+    local store = self._store;
+
+    logger.debug('getting pair (%s) count', itemPairKey);
+    return tonumber(store.call('zscore', self._keys.item_pair_count_zset,
+      itemPairKey));
+  end -- TCREngine::private getPairCount()
+
+  -----------------------------------------------------------------------------
+
+  --[[
+  -- Retrieves the user's items.
+  --]]
+  local function getUserItems (
+    userId
+  )
+    local logger = self._logger;
+    local store = self._store;
+    logger.debug('getting user (%s) items', userId);
+    local items = store.call('hgetall', composeUserInterestHashKey(userId));
+    if (0 == #items) then
+      return nil;
+    end
+
+    -- Convert Redis hash result to table
+    local user = {};
+    for ii = 1, #items, 2
+    do
+      user[items[ii]] = tonumber(items[(ii + 1)]);
+    end
+
+    return user;
+  end -- TCREngine::private getUserItems()
+
+  -----------------------------------------------------------------------------
+
+  --[[
+  -- Updates the count (i.e. the sum of all event weights) for a given item.
+  --]]
+  local function incrementItemCount (
+    itemId,
+    deltaWeight
+  )
+    local logger = self._logger;
+    local store = self._store;
+
+    logger.debug('incrementing item (%s) count by weight (%f)', itemId,
+      deltaWeight);
+
+    return store.call('zincrby', self._keys.item_counts_zset, deltaWeight,
+      itemId);
+  end -- TCREngine::private incrementItemCount()
+
+  -----------------------------------------------------------------------------
+
+  local function incrementPairCount (
+    itemPairKey,
+    deltaCoRating
+  )
+    local logger = self._logger;
+    local store = self._store;
+
+    logger.debug('incrementing pair (%s) count (%f)', itemPairKey,
+      deltaCoRating);
+    store.call('zincrby', self._keys.item_pair_count_zset, deltaCoRating,
+      itemPairKey);
+  end -- TCREngine::private incrementPairCount()
 
   -----------------------------------------------------------------------------
 
   --[[
   -- Composes two ids into a pair.
   --]]
-  function self._saveSimilarity (
-    firstItem,
-    secondItem,
-    similarity
+  local function setItemSimilarity (
+    firstItemId,
+    secondItemId,
+    similarityScore
   )
-    redis.call('zadd', 'z:item:similarities:' .. firstItem, similarity,
-      secondItem);
-    redis.call('zadd', 'z:item:similarities:' .. secondItem, similarity,
-      firstItem);
+    local logger = self._logger;
+    local store = self._store;
 
-    local itemPairKey = self._composeItemPairKey(firstItem, secondItem);
-    redis.call('hset', 'h:item:similarities:', itemPairKey, similarity);
+    logger.debug('saving similarity (%f) between items (%s and %s)',
+      similarityScore, firstItemId, secondItemId);
+
+    store.call('zadd', composeItemSimilarityZSetKey(firstItemId),
+      similarityScore, secondItemId);
+
+    store.call('zadd', composeItemSimilarityZSetKey(secondItemId),
+      similarityScore, firstItemId);
+
+    store.call('hset', self._keys.item_sims_hash, composeItemPairHashFieldKey(
+      firstItemId, secondItemId), similarityScore);
   end -- TCREngine::_saveSimilarity()
 
   -----------------------------------------------------------------------------
@@ -173,40 +338,41 @@ TCREngine.new = function(dbname)
   --[[
   -- Composes two ids into a pair.
   --]]
-  function self._updateSimilarity (
+  local function updateItemSimilarity (
     firstItem,
     newItemCount,
     secondItem,
     pairCount
   )
-    local __FUNC__ = '_updateSimilarity';
+    local __FUNC__ = 'updateItemSimilarity';
+    local logger = self._logger;
 
-    local secondItemCount = redis.call('zscore', 'z:item:counts', secondItem);
+    local secondItemCount = getItemCount(secondItem);
     if (nil == secondItemCount) then
-      local err = (self._compose_class_method_name(__FUNC__) .. ': ' ..
+      local err = (composeMethodName(__FUNC__) .. ': ' ..
         'a count for item (' .. secondItem .. ') does not exist.');
-      redis.log(redis.LOG_DEBUG, err);
+      logger.debug(err);
       return redis.error_reply(err);
     end
 
     secondItemCount = tonumber(secondItemCount);
     if (not is_integer(secondItemCount) and secondItemCount > 0) then
-      local err = (self._compose_class_method_name(__FUNC__) .. ': ' ..
+      local err = (composeMethodName(__FUNC__) .. ': ' ..
         'secondItemCount (' .. secondItemCount .. ') is not a number.');
-      redis.log(redis.LOG_DEBUG, err);
+      logger.debug(err);
       return redis.error_reply(err);
     end
 
-    self._saveSimilarity(firstItem, secondItem,
+    setItemSimilarity(firstItem, secondItem,
       (pairCount / (math.sqrt(newItemCount) * math.sqrt(secondItemCount))));
-  end -- TCREngine::_updateSimilarity()
+  end -- TCREngine::_updateItemSimilarity()
 
   -----------------------------------------------------------------------------
 
   --[[
   -- Composes two ids into a pair.
   --]]
-  function self._updatePairCount (
+  local function updatePairCount (
     eventItemId,
     currentItemWeight,
     newItemWeight,
@@ -225,19 +391,20 @@ TCREngine.new = function(dbname)
       end
     end
 
-    local itemPairKey = self._composeItemPairKey(eventItemId, anotherItemId);
-    local currentPairCount = tonumber(redis.call('zscore', 'z:item:paircounts',
-      itemPairKey));
+    local itemPairKey = composeItemPairHashFieldKey(eventItemId,
+      anotherItemId);
+    local currentPairCount = getPairCount(itemPairKey);
+
     --if (nil == currentPairCount) then
     if (type(currentPairCount) ~= 'number') then
       currentPairCount = 0;
     end
 
     if (0 ~= deltaCoRating) then
-      redis.call('zincrby', 'z:item:paircounts', deltaCoRating, itemPairKey);
+      incrementPairCount(itemPairKey, deltaCoRating);
     end
 
-    self._updateSimilarity(eventItemId, newItemCount, anotherItemId,
+    updateItemSimilarity(eventItemId, newItemCount, anotherItemId,
       (currentPairCount + deltaCoRating));
   end -- TCREngine::_updatePairCount()
 
@@ -246,18 +413,18 @@ TCREngine.new = function(dbname)
   --[[
   -- Composes two ids into a pair.
   --]]
-  function self._updatePair (
+  local function updatePair (
     eventItemId,
     currentItemWeight,
     newItemWeight,
     newItemCount,
     anotherItem
   )
-    redis.log(redis.LOG_DEBUG, 'update pair ' .. eventItemId
-      .. ' / ' .. anotherItem.item_id);
+    local logger = self._logger;
+    logger.debug('update pair %s:%s', eventItemId, anotherItem.item_id);
     local anotherItemId = anotherItem.item_id;
     local anotherItemWeight = anotherItem.weight;
-    self._updatePairCount(eventItemId, currentItemWeight, newItemWeight,
+    updatePairCount(eventItemId, currentItemWeight, newItemWeight,
       newItemCount, anotherItemId, anotherItemWeight);
   end -- TCREngine::_updatePair()
 
@@ -266,29 +433,30 @@ TCREngine.new = function(dbname)
   --[[
   -- Composes two ids into a pair.
   --]]
-  function self._recalculateSimilarity (
+  local function recalculateSimilarity (
     user,
     item_id,
     current_weight,
     new_weight
   )
-    local __FUNC__ = '_recalculateSimilarity';
+    local __FUNC__ = 'recalculateSimilarity';
+    local logger = self._logger;
 
-    local currentItemCount = redis.call('zscore', 'z:item:counts', item_id);
+    local currentItemCount = getItemCount(item_id);
     if (false == currentItemCount) then
-      local err = (self._compose_class_method_name(__FUNC__) .. ': ' ..
+      local err = (composeMethodName(__FUNC__) .. ': ' ..
         'a count for item (' .. item_id .. ') does not exist.');
-      redis.log(redis.LOG_DEBUG, err);
+      logger.debug(err);
       currentItemCount = 0;
     end
 
     local itemCountDelta = (new_weight - current_weight);
-    self._updateItemCount(item_id, itemCountDelta);
+    incrementItemCount(item_id, itemCountDelta);
     local newItemCount = (currentItemCount + itemCountDelta);
     for another_item_id, another_item_value in pairs(user)
     do
       if (another_item_id ~= item_id) then
-        self._updatePair(item_id, current_weight, new_weight, newItemCount,
+        updatePair(item_id, current_weight, new_weight, newItemCount,
           { item_id = another_item_id, weight = another_item_value });
       end
     end
@@ -299,39 +467,19 @@ TCREngine.new = function(dbname)
   -----------------------------------------------------------------------------
 
   --[[
-  -- Retrieves the user's items.
-  --]]
-  function self._getUserItems (
-    user_id
-  )
-    local user_key = ('h:user:i:' .. user_id);
-    local user_data = redis.call('hgetall', user_key);
-    if (0 == #user_data) then
-      return nil;
-    end
-
-    -- Convert Redis hash result to table
-    local user = {};
-    for ii = 1, #user_data, 2
-    do
-      user[user_data[ii]] = tonumber(user_data[(ii + 1)]);
-    end
-
-    return user;
-  end -- TCREngine::_getUserItems()
-
-  -----------------------------------------------------------------------------
-
-  --[[
   -- Composes two ids into a pair.
   --]]
-  function self._track_event (
+  self._track_event = function (
     user_id,
     item_id,
     event_type,
     weight
   )
-    redis.log(redis.LOG_DEBUG, "track_event");
+    local logger = self._logger;
+    local store = self._store;
+    local user_key = composeUserInterestHashKey(user_id);
+
+    logger.debug("track_event");
     --[[
     -- If this event is an impression, we only need to record it for
     -- statistics, not for recommendation.
@@ -341,9 +489,13 @@ TCREngine.new = function(dbname)
     end
 
     -- Fetch user
-    local user = self._getUserItems(user_id);
+    local user = getUserItems(user_id);
     if (nil == user) then
-      self._saveNewUser(user_id, item_id, weight);
+      logger.debug('saving new user (%s) for item (%s) by weight (%f)',
+        user_id, item_id, weight);
+      --self._saveNewUser(user_id, item_id, weight);
+      store.call('hset', user_key, item_id, weight);
+      incrementItemCount(item_id, weight);
       return;
     end
 
@@ -357,10 +509,8 @@ TCREngine.new = function(dbname)
       return;
     end
 
-    local user_key = ('h:user:i:' .. user_id);
-    redis.call('hset', user_key, item_id, newWeight);
-    return self._recalculateSimilarity(user, item_id, currentWeight,
-      newWeight);
+    store.call('hset', user_key, item_id, newWeight);
+    return recalculateSimilarity(user, item_id, currentWeight, newWeight);
   end -- TCREngine::_track_event()
 
   -----------------------------------------------------------------------------
@@ -368,16 +518,19 @@ TCREngine.new = function(dbname)
   --[[
   -- Composes two ids into a pair.
   --]]
-  function self.getRecommendations (
+  self.getRecommendations = function (
     user_id,
     limit
   )
+    local logger = self._logger;
+    local store = self._store;
+
     limit = limit or 10;
-    local userItems = self._getUserItems(user_id);
+    local userItems = getUserItems(user_id);
 
     redis.debug(userItems);
     if (nil == userItems) then
-      return nil;
+      return {};
     end
 
     --[[
@@ -395,11 +548,11 @@ TCREngine.new = function(dbname)
     do
       local counter = 0;
       local similarities = {};
-      local similarItems = redis.call('zrevrangebyscore',
-        'z:item:similarities:' .. item_id,
+      local similarItems = store.call('zrevrangebyscore',
+        composeItemSimilarityZSetKey(item_id),
         '+inf', '-inf', 'withscores', 'limit', 0, 100);
-      --redis.log(redis.LOG_DEBUG, "similarItems for " .. item_id);
-      redis.log(redis.LOG_DEBUG, 'similarItems...');
+      --logger.debug("similarItems for " .. item_id);
+      logger.debug('similarItems...');
       redis.debug(similarItems);
       --local sims = similarItems;
 
@@ -408,7 +561,7 @@ TCREngine.new = function(dbname)
       do
         sims[similarItems[ii]] = tonumber(similarItems[ii + 1]);
       end
-      redis.log(redis.LOG_DEBUG, 'sims...');
+      logger.debug('sims...');
       redis.debug(sims);
 
       for similar_item_id, similar_item_value in pairs(sims)
@@ -432,7 +585,7 @@ TCREngine.new = function(dbname)
           end
         end
       end
-      --redis.log(redis.LOG_DEBUG, "-- SIMILARITIES");
+      --logger.debug("-- SIMILARITIES");
       --redis.debug(similarities);
 
       if (0 < #similarities) then
@@ -445,7 +598,7 @@ TCREngine.new = function(dbname)
         });
       end
     end
-    redis.log(redis.LOG_DEBUG, "-- ITEM SIMILARITIES");
+    logger.debug("-- ITEM SIMILARITIES");
     redis.debug(itemSimilarities);
 
     -- Predict the user's weight for each recommended item
@@ -454,9 +607,9 @@ TCREngine.new = function(dbname)
     do
       local item = itemSimilarities[ii][1];
       local sims = itemSimilarities[ii][2];
-      redis.log(redis.LOG_DEBUG, "-- item " .. ii);
+      logger.debug("-- item " .. ii);
       redis.debug(item);
-      redis.log(redis.LOG_DEBUG, "-- sims " .. ii);
+      logger.debug("-- sims " .. ii);
       redis.debug(sims);
       for jj = 1, #sims
       do
@@ -465,7 +618,7 @@ TCREngine.new = function(dbname)
       end
     end
 
-    redis.log(redis.LOG_DEBUG, "-- SCORES");
+    logger.debug("-- SCORES");
     redis.debug(scores);
 
     local final_scores = {};
@@ -476,41 +629,41 @@ TCREngine.new = function(dbname)
         final_scores[score[1]] = { 0, 0 };
       end
 
-      redis.log(redis.LOG_DEBUG, 'final[' .. score[1] .. '][1] = '
+      logger.debug('final[' .. score[1] .. '][1] = '
         .. final_scores[score[1]][1] .. ' + ' .. score[2]);
-      redis.log(redis.LOG_DEBUG, 'final[' .. score[1] .. '][2] = '
+      logger.debug('final[' .. score[1] .. '][2] = '
         .. final_scores[score[1]][2] .. ' + ' .. score[3]);
       final_scores[score[1]][1] = (final_scores[score[1]][1] + score[2]);
       final_scores[score[1]][2] = (final_scores[score[1]][2] + score[3]);
     end
 
-    --redis.log(redis.LOG_DEBUG, "-- FINAL SCORES");
+    --logger.debug("-- FINAL SCORES");
     --redis.debug(final_scores);
 
     local sum = 0;
     for item_id, item_score in pairs(final_scores)
     do
-      redis.log(redis.LOG_DEBUG, '> final[' .. item_id .. '] = '
+      logger.debug('> final[' .. item_id .. '] = '
         .. item_score[1] .. ' / ' .. item_score[2]);
       final_scores[item_id] = (item_score[1] / item_score[2]);
       sum = (sum + final_scores[item_id]);
     end
 
-    --redis.log(redis.LOG_DEBUG, "-- FINAL SCORES 2");
+    --logger.debug("-- FINAL SCORES 2");
     --redis.debug(final_scores);
 
     local result = {};
     for item_id, item_score in pairs(final_scores)
     do
-      --redis.log(redis.LOG_DEBUG, "> " .. item_id)
+      --logger.debug("> " .. item_id)
       table.insert(result, { id = item_id, score = (item_score / sum) });
       --final_scores[item_id] = nil;
     end
 
-    --redis.log(redis.LOG_DEBUG, "-- FINAL SCORES (NORMALIZED AND UNSORTED)");
+    --logger.debug("-- FINAL SCORES (NORMALIZED AND UNSORTED)");
     --redis.debug(result);
 
-    --redis.log(redis.LOG_DEBUG, "-- FINAL SCORES (NORMALIZED AND SORTED)");
+    --logger.debug("-- FINAL SCORES (NORMALIZED AND SORTED)");
     table.sort(result, function (a, b)
       return a.score > b.score;
     end);
@@ -524,12 +677,15 @@ TCREngine.new = function(dbname)
   --[[
   -- Composes two ids into a pair.
   --]]
-  function self._getRecommendationsFast (
+  self._getRecommendationsFast = function (
     user_id,
     limit
   )
+    local logger = self._logger;
+    local store = self._store;
+
     limit = limit or 10;
-    local userItems = self._getUserItems(user_id);
+    local userItems = getUserItems(user_id);
 
     if (nil == userItems) then
       return nil;
@@ -551,7 +707,7 @@ TCREngine.new = function(dbname)
     local counter = 0;
     for item_id, item_value in pairs(userItems)
     do
-      keys[#keys + 1] = ('z:item:similarities:' .. item_id);
+      keys[#keys + 1] = composeItemSimilarityZSetKey(item_id);
       weights[#weights + 1] = item_value;
     end
 
@@ -568,31 +724,31 @@ TCREngine.new = function(dbname)
     end
 
     --[[
-    redis.call('zunionstore', 'out', '4',
+    store.call('zunionstore', 'out', '4',
       'z:item:similarities:item-4', 'z:item:similarities:item-2',
       'z:item:similarities:item-1', 'z:item:similarities:item-3',
       'weights', '3', '5', '2', '2');
     ]]--
     redis.debug(keyOnlyArgs);
-    redis.call('zunionstore', 'out-summed', #keys, unpack(keyOnlyArgs));
-    redis.call('zunionstore', 'out-weighted', #keys, unpack(args));
+    store.call('zunionstore', 'out-summed', #keys, unpack(keyOnlyArgs));
+    store.call('zunionstore', 'out-weighted', #keys, unpack(args));
 
-    --local similarItems = redis.call('zdiffstore', 'out', '+inf', '-inf',
+    --local similarItems = store.call('zdiffstore', 'out', '+inf', '-inf',
     --  'withscores', 'limit', 0, 100);
-    local similarItemsSummed = redis.call('zrevrangebyscore', 'out-summed',
+    local similarItemsSummed = store.call('zrevrangebyscore', 'out-summed',
       '+inf', '-inf', 'withscores', 'limit', 0, 100);
-    redis.log(redis.LOG_DEBUG, "summed");
+    logger.debug("summed");
     redis.debug(similarItemsSummed);
-    local similarItems = redis.call('zrevrangebyscore', 'out-weighted',
+    local similarItems = store.call('zrevrangebyscore', 'out-weighted',
       '+inf', '-inf', 'withscores', 'limit', 0, 100);
-    --redis.log(redis.LOG_DEBUG, "weighted");
+    --logger.debug("weighted");
     --redis.debug(similarItems);
     local sims = {};
     for ii = 1, #similarItems
     do
-      local similarItemSum = tonumber(redis.call('zscore', 'out-summed',
+      local similarItemSum = tonumber(store.call('zscore', 'out-summed',
         similarItems[ii][1]));
-      redis.log(redis.LOG_DEBUG, '> sims[' .. similarItems[ii][1] .. '] = '
+      logger.debug('> sims[' .. similarItems[ii][1] .. '] = '
         .. tonumber(similarItems[ii][2]) .. ' / ' .. similarItemSum);
       sims[similarItems[ii][1]] = (tonumber(similarItems[ii][2])
         / similarItemSum);
@@ -637,41 +793,40 @@ TCREngine.new = function(dbname)
   --[[ ABSTRACT IMPLEMENTATIONS ]]---------------------------------------------
   -----------------------------------------------------------------------------
 
-  function self.addUser()
-    redis.log(redis.LOG_DEBUG, "Inside Overriding Function ("
-      .. self.dbname .. ")")
+  self.addUser = function ()
+    local logger = self._logger;
+    logger.debug("Inside Overriding Function ("
+      .. self._short_name .. ")")
   end -- TCREngine::addUser()
 
   -----------------------------------------------------------------------------
 
-  function self.addItem()
-    redis.log(redis.LOG_DEBUG, "Inside Overriding Function ("
-      .. self.dbname .. ")")
+  self.addItem = function ()
+    local logger = self._logger;
+    logger.debug("Inside Overriding Function ("
+      .. self._short_name .. ")")
   end -- TCREngine::addItem()
 
   -----------------------------------------------------------------------------
 
-  function self.recordInteraction(interaction)
+  self.recordInteraction = function (interaction)
     self._track_event(interaction.userId, interaction.itemId,
       interaction.event_type, interaction.weight);
   end -- TCREngine::recordInteraction()
 
   -----------------------------------------------------------------------------
 
-  -----------------------------------------------------------------------------
-
-  return self
+  return (self);
 end -- TCREngine
-
 
 --local tcre = TCREngine.new('tcre');
 --[[
-tcre._updateItemCount('item-001', 1.0);
+tcre.incrementItemCount('item-001', 1.0);
 tcre._saveNewUser('user-001', 'item-001', 1.0);
-redis.debug(tcre._composeItemPairKey('10301212', '166'))
-redis.debug(tcre._composeItemPairKey(166, 10301212))
+redis.debug(tcre._composeItemPairHashFieldKey('10301212', '166'))
+redis.debug(tcre._composeItemPairHashFieldKey(166, 10301212))
 tcre._saveSimilarity('item-001', 'item-002', 0.69);
-tcre._updateSimilarity('item-002', 30, 'item-001', 2);
+tcre._updateItemSimilarity('item-002', 30, 'item-001', 2);
 ]]--
 
 --[[
@@ -687,7 +842,7 @@ tcre._track_event("10301212", "item-4", "add-to-cart", 3);
 --db:dump();
 tcre._track_event("10301212", "item-2", "buy", 5);
 --db:dump();
-redis.log(redis.LOG_DEBUG, '--- recs ---');
+logger.debug('--- recs ---');
 redis.debug(tcre._getRecommendations("10301212"));
 redis.debug(tcre._getRecommendationsFast("10301212"));
 db:dump();
